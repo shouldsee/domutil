@@ -813,3 +813,242 @@ def matrify( lst, flat = False, l = None):
             count[k] = (v,)
     OUTPUT.update(count)
     return OUTPUT
+
+
+
+##############################################
+##### Mon 23 Oct 23:23:37 BST 2017
+##############################################
+
+from tempfile import TemporaryFile , mkdtemp
+
+def file_len(fname):
+    with open(fname) as f:
+        for i, l in enumerate(f):
+            pass
+    return i + 1
+
+################## newer version of split_file ##################
+def split_file(fname, number = None, linecount = None, delimiter = '\n', 
+               header = '\n', footer = '\n',
+               start = 0, end = -1):
+    if linecount and number:
+        raise Exception('You can only specify one of linecount or number')
+    f_handles = []
+    tempdir = mkdtemp(prefix = '/tmp/feng')
+    
+#     lcount = file_len(fname)
+    with open(fname,'r') as f:
+#         lines = f.readlines()
+        lines = f.read().split(delimiter)
+        lcount = len(lines)
+    print tempdir
+    print lcount 
+#     return
+    
+    if number:
+#         with open(fname) as f:
+#             lines = f.readlines()
+        lcount = len(lines)
+        nlcount = lcount // number + 1
+        idxs = range( 0, lcount , nlcount)
+        for i,idx in enumerate(idxs):
+#             print i
+#             if i >= 11:
+#                 break
+
+#             f = TemporaryFile()
+            temp_fname = tempdir + '/%d'%i
+            f = open(temp_fname, 'w+')
+            f.write( header)
+            f.write( delimiter.join(lines[idx: idx+nlcount]))
+            f.write( footer)
+#             f.close()
+#             f = open(temp_fname,'r')
+#             f.seek(0)
+            f_handles.append(temp_fname)
+    if linecount:
+#         idx = start
+        idx = 0
+        i   = 0
+        nlcount = linecount
+        while 1:
+            temp_fname = tempdir + '/%d'%i
+            f = open(temp_fname, 'w' )
+            f.write( header)
+            f.write( delimiter.join(lines[idx:idx + nlcount]) )
+            f.write( footer)
+            f.seek(0)
+            f_handles.append(temp_fname)
+            if idx + nlcount+1 >= lcount : 
+                break
+            else:
+                idx += nlcount
+                i   += 1
+    return f_handles
+import Bio.SeqIO
+def hashfasta(fname):
+    it = Bio.SeqIO.parse( fname,'fasta' )
+    hash2did = {}
+    # i = 0
+    for i,ent in enumerate(it):
+        h = hash(ent.name) 
+        hash2did[ h ] = (i,ent.name)
+    return hash2did
+
+
+def f(oname = 'tmp'):
+#     oname = 'tmp'
+    it = Bio.SearchIO.parse( oname,'fasta-m10' )
+    l = []
+    for ent in it:
+        hits = ent.__dict__['_items']
+        qid = hash(ent.id)
+        for hit in hits.values():
+#             print hit             #### Hit
+#             print hit[0].__dict__ #### HSP
+#             print hit[0][0]       #### HSPFrag
+#             print len(hit[0][0])  #### HSPfrag    
+            v = float(hit[0].opt_score)/len(hit[0][0])
+#             v = float(hit[0].opt_score)
+    
+            jid = hash(hit.id)
+            l += [ ((qid,jid),v) ]
+#         raise Exception('stop')
+    return l
+
+def out2dmat( fname,  hash2did, para = 10,
+            qfile  = None,libfile = None,):
+    def findheader(fname):
+        with open(fname,'r') as f:            
+            header = ''
+            line = f.readline()
+            try:
+                while not line.startswith('Query'):
+                    header += line
+                    line = f.readline()            
+                header += line
+            except Exception as e:
+                raise Exception("Unable to grab the header from file :'%s'"%fname + str(e) )
+            buf = f.read()
+            tmpf = 'parse.tmp'
+            with open( tmpf,'w') as of:
+                 of.write(buf)
+        return header, tmpf
+    if isinstance( fname,list):
+        f_handles = fname
+        tmpf = ''
+    else:
+#     if 1:
+        header,tmpf = findheader(fname)
+#         f_handles = split_file( fname, number = para,
+#                        delimiter = '>>><<<',
+#                        header = header,
+#                        footer = '\n>>>///\n',
+#                               start = 10,)
+        f_handles = split_file( tmpf, number = para,
+#                        delimiter = 'Query',
+                        delimiter = '>>><<<',
+#                        header = header,
+                               header  = header,
+                       footer = '\n>>>///\n',
+                              start = 0,)
+        print header
+
+    xs = []
+    ys = []
+    if para > 1:
+        pool = mp.Pool( para )
+        res = pool.map( f, f_handles)
+        lst = sum( res,[] )
+        d = dict(lst)
+        pool.close()
+#         pool.join()
+    else:
+        d  = {}
+        i = 0
+        print 'handles:',f_handles
+        for oname in f_handles:        
+            print 'now parsing:',oname
+            print i
+            i += 1
+            it = Bio.SearchIO.parse( oname,'fasta-m10' )
+            for ent in it:
+            #     print ent
+                hits = ent.__dict__['_items']
+                qid = hash(ent.id)
+                for hit in hits.values():
+                    v = hit[0].bitscore
+                    jid = hash(hit.id)
+                    d[ ( qid, jid) ] = v
+#         return d
+        
+    l = len(hash2did)
+    om = scipy.sparse.dok_matrix( (l,l) )
+    order_d = { (hash2did[k[0]][0],
+                hash2did[k[1]][0]):
+               v for k,v in d.iteritems()
+              }
+    om.update(order_d)
+    
+    if tmpf:
+        os.remove(tmpf)
+    for tmpf in f_handles:
+        os.remove(tmpf)
+    return om
+################ old routine ########################
+# om.mean()
+# tm.mean()
+# fname = full("$SEQlib/cath-dataset-nonredundant-S40.fa")
+def readfasta( fname ):
+    with open(fname, 'r') as f:
+        lines =  f.readlines()
+    seqs = []
+    sfs  = []
+    data = []
+    for i in range(0,len(lines),2):
+        header = lines[i].rstrip('\n')
+        seq = lines[i+1].rstrip('\n')
+#         acc = p_cathFAheader.findall(header)[0]
+#         if not acc in did2node:
+#             continue    
+#         sf = did2node[acc]
+        data.append( (i//2, header, seq) ) 
+    return data
+def writefasta(fname, data):
+    with open(fname,'w') as f:
+        for i,header,seq in data:
+            f.write( '%s\n%s\n' % (header,seq))
+
+def compare( om, tm = None, thres = 0.5):
+    tm = tm.tocsr()
+    om = om.tocsr()
+    tp = ((om + tm)  == 2).sum()
+    fp = ((om - tm)  == 1).sum()
+    return tp,fp,
+
+
+
+def f2(obj):
+    x,y = obj
+    v = x[-1] == y[-1]
+    return ( (x[0],y[0]), v)
+
+import multiprocessing as mp
+import multiprocessing as mp
+def findtm( hash2head, did2node):
+    INPUT = list()
+    print len(hash2head)
+    for i,head in hash2head.itervalues():
+        did = p_cathFAheader.findall(head)[0]
+        INPUT += [(i,did2node[did])]
+    l = len(INPUT)
+#     return INPUT
+        # INPUT = hash2did
+    it = itertools.combinations( INPUT,2 )
+    OUTPUT = scipy.sparse.dok_matrix( ( l, l), )
+    d = { (obj[0][0],obj[1][0]):obj[0][-1] == obj[1][-1] for obj in it}
+    OUTPUT.update(d)
+    tm = OUTPUT
+    return tm
+# hash2head
